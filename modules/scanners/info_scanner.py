@@ -18,10 +18,18 @@ logger = logging.getLogger('websp1der.scanners.info')
 class InfoScanner:
     """Scanner para coleta de informações sobre o alvo."""
     
-    def __init__(self):
-        """Inicializa o scanner de informações."""
+    def __init__(self, url=None, session=None):
+        """
+        Inicializa o scanner de informações.
+        
+        Args:
+            url (str, opcional): URL alvo para escaneamento
+            session (requests.Session, opcional): Sessão de requests para manter cookies/estado
+        """
         self.name = "Information Gathering Scanner"
         self.description = "Scanner para coleta de informações sobre o alvo"
+        self.target_url = url
+        self.session = session or requests.Session()
         
         # Padrões para detecção de tecnologias
         self.tech_patterns = {
@@ -272,10 +280,10 @@ class InfoScanner:
     
     def collect_info(self, url, proxies=None, headers=None):
         """
-        Coleta informações sobre uma URL.
+        Coleta informações detalhadas sobre uma URL.
         
         Args:
-            url (str): URL para coletar informações
+            url (str): URL para analisar
             proxies (dict, opcional): Configuração de proxy
             headers (dict, opcional): Cabeçalhos HTTP
             
@@ -284,62 +292,59 @@ class InfoScanner:
         """
         info = {
             'url': url,
-            'domain': '',
-            'ip': '',
-            'server': '',
-            'technologies': {},
-            'metadata': {},
+            'domain': urlparse(url).netloc,
+            'technologies': [],
+            'headers': {},
+            'dns_info': {},
             'comments': [],
-            'emails': []
+            'emails': [],
+            'metadata': {}
         }
         
         try:
-            parsed_url = urlparse(url)
-            domain = parsed_url.netloc
-            
-            if ':' in domain:  # Remover porta, se presente
-                domain = domain.split(':')[0]
-                
-            info['domain'] = domain
-            
-            # Obter endereço IP
-            try:
-                info['ip'] = socket.gethostbyname(domain)
-            except Exception:
-                pass
-            
-            # Fazer requisição para obter conteúdo e cabeçalhos
-            response = requests.get(
-                url,
+            # Fazer requisição para obter a página
+            response = self.session.get(
+                url, 
                 headers=headers,
                 proxies=proxies,
-                timeout=self.timeout,
+                timeout=10,
                 verify=False  # Desabilitar verificação SSL para testes
             )
             
-            response_headers = dict(response.headers)
-            content = response.text
+            # Armazenar cabeçalhos da resposta
+            info['headers'] = dict(response.headers)
             
-            # Extrair informações do servidor
-            if 'Server' in response_headers:
-                info['server'] = response_headers['Server']
+            # Extrair tecnologias da resposta
+            if response.status_code == 200:
+                # Detectar tecnologias do conteúdo HTML e cabeçalhos
+                techs = self.detect_technologies(url, response.text, response.headers)
+                info['technologies'] = techs
+                
+                # Extrair comentários HTML
+                comments = self.extract_html_comments(response.text)
+                info['comments'] = comments
+                
+                # Extrair endereços de e-mail
+                emails = self.extract_emails(response.text)
+                info['emails'] = emails
+                
+                # Extrair metadados
+                metadata = self.extract_metadata(response.text)
+                info['metadata'] = metadata
             
-            # Detectar tecnologias
-            info['technologies'] = self.detect_technologies(url, content, response_headers)
-            
-            # Extrair metadados
-            info['metadata'] = self.extract_metadata(content)
-            
-            # Extrair comentários HTML
-            info['comments'] = self.extract_html_comments(content)
-            
-            # Extrair e-mails
-            info['emails'] = self.extract_emails(content)
-            
+            # Obter informações de DNS
+            try:
+                domain = urlparse(url).netloc
+                ip = socket.gethostbyname(domain)
+                info['dns_info'] = {
+                    'ip': ip,
+                    'hostname': socket.getfqdn(domain)
+                }
+            except socket.gaierror:
+                pass
+                
         except requests.RequestException as e:
-            logger.error(f"Erro ao coletar informações para {url}: {str(e)}")
-        except Exception as e:
-            logger.error(f"Erro inesperado ao coletar informações para {url}: {str(e)}")
+            logger.error(f"Erro ao coletar informações de {url}: {str(e)}")
         
         return info
     
@@ -435,48 +440,24 @@ class InfoScanner:
         
         return vulnerabilities
     
-    def scan(self, urls, forms, proxies=None, headers=None):
+    def scan(self):
         """
-        Executa o escaneamento de informações em URLs.
+        Executa o escaneamento de informações.
         
-        Args:
-            urls (list): Lista de URLs para analisar
-            forms (list): Lista de formulários (não utilizado por este scanner)
-            proxies (dict, opcional): Configuração de proxy
-            headers (dict, opcional): Cabeçalhos HTTP
-            
         Returns:
             list: Lista de vulnerabilidades encontradas
         """
-        vulnerabilities = []
-        collected_info = {}
-        
-        logger.info("Iniciando coleta de informações...")
-        
-        # Analisar URLs únicas
-        unique_domains = set()
-        
-        for url in urls:
-            parsed_url = urlparse(url)
-            domain = parsed_url.netloc
+        if not self.target_url:
+            logger.error("URL alvo não especificada para Info Scanner")
+            return []
             
-            if domain not in unique_domains:
-                unique_domains.add(domain)
-                
-                # Coletar informações da URL base
-                base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-                
-                logger.debug(f"Coletando informações para: {base_url}")
-                domain_info = self.collect_info(base_url, proxies, headers)
-                collected_info[domain] = domain_info
-                
-                # Analisar informações vazadas
-                leaked_vulns = self.analyze_leaked_info(domain_info)
-                vulnerabilities.extend(leaked_vulns)
+        vulnerabilities = []
         
-        # Armazenar as informações coletadas para uso por outros scanners
-        self.collected_info = collected_info
+        # Coletar informações da URL principal
+        info = self.collect_info(self.target_url)
         
-        logger.info(f"Coleta de informações concluída. Encontradas {len(vulnerabilities)} vulnerabilidades.")
+        # Analisar informações para encontrar possíveis problemas
+        vulns = self.analyze_leaked_info(info)
+        vulnerabilities.extend(vulns)
         
         return vulnerabilities

@@ -17,10 +17,22 @@ logger = logging.getLogger('websp1der.scanners.csrf')
 class CSRFScanner:
     """Scanner para detecção de vulnerabilidades de Cross-Site Request Forgery (CSRF)."""
     
-    def __init__(self):
-        """Inicializa o scanner CSRF."""
+    def __init__(self, url=None, threads=5, timeout=10, session=None):
+        """
+        Inicializa o scanner CSRF.
+        
+        Args:
+            url (str, opcional): URL alvo para escaneamento
+            threads (int, opcional): Número de threads para escaneamento paralelo
+            timeout (int, opcional): Timeout para requisições em segundos
+            session (requests.Session, opcional): Sessão de requests para manter cookies/estado
+        """
         self.name = "CSRF Scanner"
         self.description = "Scanner para detecção de vulnerabilidades de Cross-Site Request Forgery (CSRF)"
+        self.target_url = url
+        self.threads = threads
+        self.timeout = timeout
+        self.session = session or requests.Session()
         
         # Padrões de tokens CSRF comuns
         self.csrf_token_patterns = [
@@ -28,13 +40,15 @@ class CSRFScanner:
             r'csrf[-_]param',
             r'csrf[-_]key',
             r'csrf[-_]value',
-            r'authenticity[-_]token',
-            r'token',
+            r'csrf[-_]field',
             r'_token',
-            r'csrfmiddlewaretoken',
-            r'xsrf[-_]token',
+            r'authenticity_token',
+            r'token',
+            r'csrf',
             r'_csrf',
-            r'__RequestVerificationToken'
+            r'xsrf',
+            r'_xsrf',
+            r'nonce'
         ]
         
         # Cabeçalhos relacionados a CSRF
@@ -225,7 +239,7 @@ class CSRFScanner:
     
     def scan_url(self, url, proxies=None, headers=None):
         """
-        Analisa uma URL para vulnerabilidades CSRF.
+        Analisa uma URL para verificar proteções CSRF.
         
         Args:
             url (str): URL para analisar
@@ -238,74 +252,91 @@ class CSRFScanner:
         vulnerabilities = []
         
         try:
-            # Criar uma sessão para manter cookies
-            session = requests.Session()
-            if proxies:
-                session.proxies.update(proxies)
-            if headers:
-                session.headers.update(headers)
+            logger.debug(f"Verificando CSRF em URL: {url}")
             
-            # Fazer requisição inicial
-            response = session.get(
-                url,
-                timeout=10,
+            # Fazer requisição para obter a página
+            response = self.session.get(
+                url, 
+                headers=headers,
+                proxies=proxies,
+                timeout=self.timeout,
                 verify=False  # Desabilitar verificação SSL para testes
             )
             
+            if response.status_code != 200:
+                return vulnerabilities
+            
             # Verificar cabeçalhos relacionados a CSRF
-            has_csrf_headers = self.check_csrf_headers(dict(response.headers))
-            
-            # Verificar tokens CSRF no HTML
-            has_token_in_html = self.has_csrf_token(response.text, url)
-            
-            # Verificar configuração SameSite dos cookies
-            has_same_site_cookies = self.check_same_site_cookies(response)
-            
-            # Se não encontrou proteções CSRF, pode ser vulnerável
-            if not has_csrf_headers and not has_token_in_html and not has_same_site_cookies:
-                # Parse HTML para extrair formulários
-                soup = BeautifulSoup(response.text, 'html.parser')
-                forms = soup.find_all('form', method=re.compile(r'post', re.IGNORECASE))
-                
-                if forms:
-                    vulnerability = {
-                        'type': 'csrf',
-                        'name': 'Cross-Site Request Forgery (CSRF)',
-                        'severity': 'medium',
-                        'location': url,
-                        'description': 'A página contém formulários POST sem proteção CSRF visível.',
-                        'evidence': f"URL: {url}\nFormulários POST sem tokens CSRF: {len(forms)}",
-                        'cwe_id': 'CWE-352',
-                        'remediation': """
-                        1. Implemente tokens CSRF em todos os formulários POST.
-                        2. Garanta que os tokens sejam únicos por sessão e por requisição.
-                        3. Verifique os tokens no servidor para cada requisição.
-                        4. Configure cookies com o atributo SameSite=Strict ou SameSite=Lax.
-                        5. Implemente cabeçalhos CORS apropriados.
-                        6. Considere implementar verificação de Referer/Origin.
-                        """
-                    }
-                    vulnerabilities.append(vulnerability)
-                
-            elif not has_same_site_cookies:
-                # Se tem tokens CSRF, mas não tem SameSite=Strict, ainda há risco
+            if not self.check_csrf_headers(response.headers):
                 vulnerability = {
-                    'type': 'csrf_partial',
-                    'name': 'Proteção CSRF Parcial',
-                    'severity': 'low',
-                    'location': url,
-                    'description': 'A página utiliza tokens CSRF, mas não implementa cookies com o atributo SameSite.',
-                    'evidence': f"URL: {url}",
-                    'cwe_id': 'CWE-352',
-                    'remediation': """
-                    Configure os cookies com o atributo SameSite=Strict ou SameSite=Lax para uma proteção adicional contra ataques CSRF.
+                    'type': 'csrf_headers',
+                    'name': 'Falta de Proteção CSRF em Cabeçalhos',
+                    'url': url,
+                    'severity': 'medium',
+                    'description': 'A aplicação não implementa cabeçalhos para prevenção de CSRF.',
+                    'details': "Cabeçalhos como 'X-Frame-Options' e 'Content-Security-Policy' podem ajudar a mitigar ataques CSRF.",
+                    'recommendation': """
+                    Implementar cabeçalhos de segurança para ajudar na prevenção de CSRF:
+                    1. X-Frame-Options: DENY ou SAMEORIGIN
+                    2. Content-Security-Policy com diretivas apropriadas
                     """
                 }
                 vulnerabilities.append(vulnerability)
             
+            # Verificar cookies SameSite
+            if not self.check_same_site_cookies(response):
+                vulnerability = {
+                    'type': 'csrf_cookies',
+                    'name': 'Cookies sem Atributo SameSite',
+                    'url': url,
+                    'severity': 'medium',
+                    'description': 'Os cookies não têm o atributo SameSite configurado.',
+                    'details': "O atributo SameSite ajuda a prevenir ataques CSRF ao controlar quando os cookies são enviados em requisições cross-site.",
+                    'recommendation': """
+                    Configurar o atributo SameSite=Lax ou SameSite=Strict para cookies de sessão e autenticação.
+                    """
+                }
+                vulnerabilities.append(vulnerability)
+            
+            # Extrair e verificar formulários na página
+            soup = BeautifulSoup(response.text, 'html.parser')
+            forms = soup.find_all('form')
+            
+            for form in forms:
+                # Verificar se o formulário é vulnerável a CSRF
+                if not self.has_csrf_token(str(form), url):
+                    # Obter detalhes do formulário
+                    form_action = form.get('action', '')
+                    if not form_action:
+                        form_action = url
+                    elif not form_action.startswith(('http://', 'https://')):
+                        form_action = urljoin(url, form_action)
+                    
+                    form_method = form.get('method', 'get').upper()
+                    form_id = form.get('id', '')
+                    form_name = form.get('name', '')
+                    form_description = f"Formulário {form_id if form_id else form_name if form_name else 'sem id/nome'} ({form_method})"
+                    
+                    # Adicionar vulnerabilidade
+                    vulnerability = {
+                        'type': 'csrf_form',
+                        'name': 'Formulário sem Proteção CSRF',
+                        'url': url,
+                        'severity': 'high' if form_method == 'POST' else 'medium',
+                        'description': f"{form_description} não tem proteção contra CSRF.",
+                        'details': f"Ação do formulário: {form_action}",
+                        'recommendation': """
+                        Implementar proteção CSRF para o formulário:
+                        1. Adicionar token CSRF em campos ocultos.
+                        2. Validar o token no servidor.
+                        3. Usar frameworks que incluem proteção CSRF automaticamente.
+                        """
+                    }
+                    vulnerabilities.append(vulnerability)
+                    
         except requests.RequestException as e:
-            logger.error(f"Erro ao analisar CSRF em {url}: {str(e)}")
-        
+            logger.error(f"Erro ao analisar URL {url} para CSRF: {str(e)}")
+            
         return vulnerabilities
     
     def scan_form(self, form, proxies=None, headers=None):
@@ -367,33 +398,21 @@ class CSRFScanner:
         
         return vulnerabilities
     
-    def scan(self, urls, forms, proxies=None, headers=None):
+    def scan(self):
         """
-        Executa o escaneamento de CSRF em URLs e formulários.
+        Executa o escaneamento de CSRF.
         
-        Args:
-            urls (list): Lista de URLs para analisar
-            forms (list): Lista de formulários para analisar
-            proxies (dict, opcional): Configuração de proxy
-            headers (dict, opcional): Cabeçalhos HTTP
-            
         Returns:
             list: Lista de vulnerabilidades encontradas
         """
+        if not self.target_url:
+            logger.error("URL alvo não especificada para CSRF Scanner")
+            return []
+            
         vulnerabilities = []
         
-        logger.info("Iniciando escaneamento de CSRF...")
-        
-        # Analisar URLs para encontrar formulários sem proteção CSRF
-        for url in urls:
-            url_vulns = self.scan_url(url, proxies, headers)
-            vulnerabilities.extend(url_vulns)
-        
-        # Analisar formulários já extraídos
-        for form in forms:
-            form_vulns = self.scan_form(form, proxies, headers)
-            vulnerabilities.extend(form_vulns)
-        
-        logger.info(f"Escaneamento de CSRF concluído. Encontradas {len(vulnerabilities)} vulnerabilidades.")
+        # Escanear a URL principal
+        csrf_vulns = self.scan_url(self.target_url)
+        vulnerabilities.extend(csrf_vulns)
         
         return vulnerabilities 

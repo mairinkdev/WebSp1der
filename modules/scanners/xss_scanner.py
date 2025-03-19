@@ -17,10 +17,22 @@ logger = logging.getLogger('websp1der.scanners.xss')
 class XSSScanner:
     """Scanner para detecção de vulnerabilidades de Cross-Site Scripting (XSS)."""
 
-    def __init__(self):
-        """Inicializa o scanner XSS."""
+    def __init__(self, url=None, threads=5, timeout=10, session=None):
+        """
+        Inicializa o scanner XSS.
+        
+        Args:
+            url (str, opcional): URL alvo para escaneamento
+            threads (int, opcional): Número de threads para escaneamento paralelo
+            timeout (int, opcional): Timeout para requisições em segundos
+            session (requests.Session, opcional): Sessão de requests para manter cookies/estado
+        """
         self.name = "XSS Scanner"
         self.description = "Scanner para detecção de vulnerabilidades de Cross-Site Scripting (XSS)"
+        self.target_url = url
+        self.threads = threads
+        self.timeout = timeout
+        self.session = session or requests.Session()
 
         # Payloads para teste de XSS
         self.payloads = [
@@ -254,33 +266,22 @@ class XSSScanner:
         
         return vulnerabilities
 
-    def scan(self, urls, forms, proxies=None, headers=None):
+    def scan(self):
         """
-        Executa o escaneamento de XSS em URLs e formulários.
-
-        Args:
-            urls (list): Lista de URLs para analisar
-            forms (list): Lista de formulários para analisar
-            proxies (dict, opcional): Configuração de proxy
-            headers (dict, opcional): Cabeçalhos HTTP
-
+        Executa o escaneamento completo de XSS.
+        
         Returns:
             list: Lista de vulnerabilidades encontradas
         """
+        if not self.target_url:
+            logger.error("URL alvo não especificada para XSS Scanner")
+            return []
+            
         vulnerabilities = []
         
-        logger.info("Iniciando escaneamento de XSS...")
+        # Testar a URL principal para parâmetros
+        vulnerabilities.extend(self.test_url_params(self.target_url))
         
-        # Testar URLs
-        for url in urls:
-            url_vulns = self.test_url_params(url, proxies, headers)
-            vulnerabilities.extend(url_vulns)
-        
-        # Testar formulários
-        for form in forms:
-            form_vulns = self.test_form(form, proxies, headers)
-            vulnerabilities.extend(form_vulns)
-        
-        logger.info(f"Escaneamento de XSS concluído. Encontradas {len(vulnerabilities)} vulnerabilidades.")
+        # Se houver formulários ou URLs adicionais para testar no futuro, poderíamos adicionar aqui
         
         return vulnerabilities 
