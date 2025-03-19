@@ -1,20 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-WebSp1der - Interface Web Simplificada
+WebSp1der - Interface Web
 Desenvolvido por: mairinkdev (https://github.com/mairinkdev)
 """
 
 import os
 import json
 import time
+import threading
+import requests
+import urllib3
 from flask import Flask, render_template, request, jsonify, session
 import re
+
+# Importar os scanners
+from modules.scanners.xss_scanner import XSSScanner
+from modules.scanners.sqli_scanner import SQLiScanner
+from modules.scanners.headers_scanner import HeadersScanner
+from modules.scanners.port_scanner import PortScanner
+from modules.scanners.csrf_scanner import CSRFScanner
+from modules.scanners.info_scanner import InfoScanner
+
+# Desativar avisos SSL
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.secret_key = os.urandom(24)
 
-# Armazenar resultados de escaneamento (apenas para demonstração)
+# Armazenar resultados de escaneamento
 scan_results = {}
 scan_status = {}
 
@@ -27,6 +41,9 @@ def start_scan():
     # Obter dados do formulário
     target_url = request.form.get('url')
     scan_type = request.form.get('scan_type', 'full')
+    threads = int(request.form.get('threads', 10))
+    timeout = int(request.form.get('timeout', 10))
+    proxy = request.form.get('proxy', None)
     
     # Validar URL
     if not target_url.startswith(('http://', 'https://')):
@@ -36,88 +53,120 @@ def start_scan():
     scan_id = str(int(time.time()))
     session['scan_id'] = scan_id
     
-    # Simular início de escaneamento
+    # Iniciar escaneamento em uma thread separada
     scan_status[scan_id] = {'status': 'running', 'progress': 0}
     
-    # Em uma aplicação real, iniciaríamos uma thread aqui
-    # Mas para fins de demonstração, vamos apenas simular um escaneamento com dados de exemplo
-    simulate_scan(scan_id, target_url)
+    # Configurar proxy se fornecido
+    proxies = None
+    if proxy:
+        proxies = {
+            'http': proxy,
+            'https': proxy
+        }
+    
+    # Iniciar thread de escaneamento
+    scan_thread = threading.Thread(
+        target=run_scan,
+        args=(scan_id, target_url, scan_type, threads, timeout, proxies)
+    )
+    scan_thread.daemon = True
+    scan_thread.start()
     
     return jsonify({
         'status': 'success', 
-        'message': 'Escaneamento iniciado (modo demonstração)!',
+        'message': 'Escaneamento iniciado!',
         'scan_id': scan_id
     })
 
-def simulate_scan(scan_id, url):
-    """Simula um escaneamento com dados de exemplo para demonstração da interface."""
-    # Iniciar com progresso 0
-    scan_status[scan_id] = {'status': 'running', 'progress': 0}
+def run_scan(scan_id, url, scan_type, threads, timeout, proxies):
+    """Executa o escaneamento real usando os módulos de scanner."""
+    try:
+        # Inicializar resultado
+        scan_results[scan_id] = {
+            'vulnerabilities': [],
+            'target_url': url,
+            'scan_type': scan_type,
+            'start_time': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'end_time': '',
+            'scan_duration': 0.0
+        }
+        
+        start_time = time.time()
+        
+        # Atualizar progresso
+        scan_status[scan_id] = {'status': 'running', 'progress': 10}
+        
+        # Configurar session para requests
+        session = requests.Session()
+        if proxies:
+            session.proxies.update(proxies)
+        
+        # Executar scanners com base no tipo de scan
+        progress = 10
+        total_scanners = 1 if scan_type != 'full' else 6
+        progress_per_scanner = 80 / total_scanners
+        
+        # Escaneamento de XSS
+        if scan_type == 'xss' or scan_type == 'full':
+            xss_scanner = XSSScanner(url, threads=threads, timeout=timeout, session=session)
+            xss_vulnerabilities = xss_scanner.scan()
+            scan_results[scan_id]['vulnerabilities'].extend(xss_vulnerabilities)
+            progress += progress_per_scanner
+            scan_status[scan_id] = {'status': 'running', 'progress': int(progress)}
+        
+        # Escaneamento de SQL Injection
+        if scan_type == 'sqli' or scan_type == 'full':
+            sqli_scanner = SQLiScanner(url, threads=threads, timeout=timeout, session=session)
+            sqli_vulnerabilities = sqli_scanner.scan()
+            scan_results[scan_id]['vulnerabilities'].extend(sqli_vulnerabilities)
+            progress += progress_per_scanner
+            scan_status[scan_id] = {'status': 'running', 'progress': int(progress)}
+        
+        # Escaneamento de Cabeçalhos de Segurança
+        if scan_type == 'headers' or scan_type == 'full':
+            headers_scanner = HeadersScanner(url, session=session)
+            headers_vulnerabilities = headers_scanner.scan()
+            scan_results[scan_id]['vulnerabilities'].extend(headers_vulnerabilities)
+            progress += progress_per_scanner
+            scan_status[scan_id] = {'status': 'running', 'progress': int(progress)}
+        
+        # Escaneamento de Portas
+        if scan_type == 'port' or scan_type == 'full':
+            port_scanner = PortScanner(url, threads=threads, timeout=timeout)
+            port_vulnerabilities = port_scanner.scan()
+            scan_results[scan_id]['vulnerabilities'].extend(port_vulnerabilities)
+            progress += progress_per_scanner
+            scan_status[scan_id] = {'status': 'running', 'progress': int(progress)}
+        
+        # Escaneamento de CSRF
+        if scan_type == 'csrf' or scan_type == 'full':
+            csrf_scanner = CSRFScanner(url, threads=threads, timeout=timeout, session=session)
+            csrf_vulnerabilities = csrf_scanner.scan()
+            scan_results[scan_id]['vulnerabilities'].extend(csrf_vulnerabilities)
+            progress += progress_per_scanner
+            scan_status[scan_id] = {'status': 'running', 'progress': int(progress)}
+        
+        # Coleta de Informações
+        if scan_type == 'info' or scan_type == 'full':
+            info_scanner = InfoScanner(url, session=session)
+            info_vulnerabilities = info_scanner.scan()
+            scan_results[scan_id]['vulnerabilities'].extend(info_vulnerabilities)
+            progress += progress_per_scanner
+            scan_status[scan_id] = {'status': 'running', 'progress': int(progress)}
+        
+        # Finalizar escaneamento
+        end_time = time.time()
+        scan_duration = round(end_time - start_time, 2)
+        
+        scan_results[scan_id]['end_time'] = time.strftime('%Y-%m-%d %H:%M:%S')
+        scan_results[scan_id]['scan_duration'] = scan_duration
+        
+        # Marcar como concluído
+        scan_status[scan_id] = {'status': 'completed', 'progress': 100}
     
-    # Depois de 2 segundos, avançar para 30%
-    time.sleep(2)
-    scan_status[scan_id] = {'status': 'running', 'progress': 30}
-    
-    # Depois de mais 2 segundos, avançar para 70%
-    time.sleep(2)
-    scan_status[scan_id] = {'status': 'running', 'progress': 70}
-    
-    # Depois de mais 2 segundos, concluir
-    time.sleep(2)
-    
-    # Extrair o domínio da URL para criar exemplos mais realistas
-    domain = re.sub(r'^https?://', '', url)
-    domain = domain.split('/')[0]  # Remove caminhos após o domínio
-    
-    # Gerar resultados de exemplo
-    scan_results[scan_id] = {
-        'vulnerabilities': [
-            {
-                'type': 'xss',
-                'name': 'Cross-Site Scripting (XSS)',
-                'url': f"https://{domain}/search.php",
-                'parameter': 'q',
-                'payload': '<script>alert(1)</script>',
-                'severity': 'high',
-                'description': 'O parâmetro "q" é vulnerável a Cross-Site Scripting (XSS)',
-                'details': 'Encontrado XSS refletido no parâmetro de busca'
-            },
-            {
-                'type': 'sqli',
-                'name': 'SQL Injection',
-                'url': f"https://{domain}/product.php",
-                'parameter': 'id',
-                'payload': "1' OR '1'='1",
-                'severity': 'high',
-                'description': 'O parâmetro "id" é vulnerável a SQL Injection',
-                'details': 'A aplicação retorna dados diferentes quando injetado SQL'
-            },
-            {
-                'type': 'headers',
-                'name': 'Cabeçalhos de Segurança Ausentes',
-                'url': url,
-                'severity': 'medium',
-                'description': 'Cabeçalhos de segurança importantes estão ausentes',
-                'details': 'X-Frame-Options, Content-Security-Policy ausentes'
-            },
-            {
-                'type': 'info',
-                'name': 'Servidor Web Exposto',
-                'url': url,
-                'severity': 'low',
-                'description': 'Informações de versão do servidor expostas',
-                'details': 'Apache/2.4.41 (Ubuntu)'
-            }
-        ],
-        'target_url': url,
-        'scan_type': 'demonstração',
-        'start_time': time.strftime('%Y-%m-%d %H:%M:%S'),
-        'end_time': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time() + 6)),
-        'scan_duration': 6.0
-    }
-    
-    # Marcar como concluído
-    scan_status[scan_id] = {'status': 'completed', 'progress': 100}
+    except Exception as e:
+        # Em caso de erro
+        scan_status[scan_id] = {'status': 'error', 'progress': 0, 'message': str(e)}
 
 @app.route('/scan_status')
 def get_scan_status():
@@ -167,8 +216,8 @@ if __name__ == '__main__':
     os.makedirs('static/js', exist_ok=True)
     os.makedirs('reports', exist_ok=True)
     
-    print("* WebSp1der Interface Web Simplificada")
-    print("* MODO DE DEMONSTRAÇÃO - Escaneamentos simulados")
+    print("* WebSp1der Interface Web")
+    print("* Escaneamento real de vulnerabilidades")
     print("* Acesse: http://localhost:5000")
     
     # Iniciar servidor
