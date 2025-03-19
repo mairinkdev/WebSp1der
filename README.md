@@ -55,22 +55,21 @@ O modo de linha de comando (CLI) é ideal para automação, integração com out
 
 ```bash
 # Escaneamento básico
-python websp1der.py -u https://exemplo.com -a basic
+python app.py -u https://exemplo.com -a basic
 
 # Escaneamento completo com relatório
-python websp1der.py -u https://exemplo.com -a full -o relatorio.json -v
+python app.py -u https://exemplo.com -a full -o relatorio.json
 
 # Uso com proxy e threads customizados
-python websp1der.py -u https://exemplo.com -a full -t 15 -p http://127.0.0.1:8080
+python app.py -u https://exemplo.com -a sqli -t 15 -p http://127.0.0.1:8080
 ```
 
 **Opções disponíveis:**
 
 ```
--u, --url URL         URL alvo para análise
--a, --analyze TYPE    Tipo de análise (basic, full, custom)
+-u, --url URL         URL alvo para análise (obrigatório)
+-a, --analyze TYPE    Tipo de análise (basic, full, custom, xss, sqli, headers, port, csrf, info)
 -o, --output FILE     Arquivo de saída para o relatório
--v, --verbose         Aumenta o nível de detalhes na saída
 -t, --threads NUM     Número de threads para análise paralela (padrão: 5)
 -p, --proxy PROXY     Usar proxy (formato: http://host:porta)
 -c, --config FILE     Arquivo de configuração personalizado
@@ -84,11 +83,8 @@ A interface web oferece uma experiência visual e interativa, perfeita para usu�
 **Iniciando a interface web:**
 
 ```bash
-# Versão completa (requer todas as dependências)
-python app.py
-
-# Versão de demonstração (simulação)
-python app_simple.py
+# Interface web completa
+python app_interface.py
 ```
 
 Após iniciar, acesse a interface através do navegador em: `http://localhost:5000`
@@ -115,7 +111,13 @@ pip install -r requirements.txt
 ### Requisitos
 
 - Python 3.8 ou superior
-- Bibliotecas listadas em `requirements.txt`
+- Bibliotecas listadas em `requirements.txt`:
+  - requests
+  - flask
+  - pyyaml
+  - beautifulsoup4
+  - colorama
+  - urllib3
 
 ## 🔎 Tipos de Escaneamento
 
