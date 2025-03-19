@@ -1,7 +1,7 @@
 # WebSp1der
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/mairinkdev/websp1der/main/screenshots/interface.png" alt="WebSp1der Interface" width="650">
+  <img src="https://raw.githubusercontent.com/mairinkdev/WebSp1der/refs/heads/master/screenshots/interface.png" alt="WebSp1der Interface" width="650">
 </p>
 
 <p align="center">
@@ -13,6 +13,7 @@
 - [Visão Geral](#visão-geral)
 - [Funcionalidades](#funcionalidades)
 - [Modos de Uso](#modos-de-uso)
+  - [Como Iniciar o WebSp1der](#como-iniciar-o-websp1der)
   - [Linha de Comando](#linha-de-comando)
   - [Interface Web](#interface-web)
 - [Instalação](#instalação)
@@ -46,6 +47,29 @@ A ferramenta foi desenvolvida com ênfase em:
 ## 🖥️ Modos de Uso
 
 O WebSp1der oferece dois modos de uso distintos para atender diferentes preferências e casos de uso:
+
+### 🚀 Como Iniciar o WebSp1der
+
+**Modo Interativo (Recomendado):**
+
+```bash
+# Iniciar o WebSp1der no modo interativo
+python websp1der_cli.py
+```
+
+Este comando inicia o WebSp1der em modo interativo, detectando automaticamente o sistema operacional e perguntando se você deseja usar o modo de interface web ou linha de comando.
+
+**Iniciar Diretamente:**
+
+Você também pode iniciar diretamente o modo específico que deseja usar:
+
+```bash
+# Interface Web
+python app_interface.py
+
+# Linha de Comando
+python app.py -u https://exemplo.com
+```
 
 ### 🔤 Linha de Comando
 
