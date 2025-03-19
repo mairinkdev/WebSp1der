@@ -1,7 +1,7 @@
 # WebSp1der
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/mairinkdev/websp1der/main/screenshots/interface.png" alt="WebSp1der Interface" width="650">
+  <img src="https://raw.githubusercontent.com/mairinkdev/WebSp1der/refs/heads/master/screenshots/interface.png" alt="WebSp1der Interface" width="650">
 </p>
 
 <p align="center">
