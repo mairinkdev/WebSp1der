@@ -1,0 +1,99 @@
+# WebSp1der - Configuração Padrão
+# Desenvolvido por: mairinkdev (https://github.com/mairinkdev)
+
+# Configurações gerais
+general:
+  timeout: 10
+  max_threads: 5
+  verify_ssl: false
+  follow_redirects: true
+  max_redirects: 5
+  max_crawl_pages: 50
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+  
+# Lista de user agents para rotação
+user_agents:
+  - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+  - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36"
+  - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:90.0) Gecko/20100101 Firefox/90.0"
+  - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15"
+  - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/92.0.902.55 Safari/537.36"
+
+# Configurações de scanners
+scanners:
+  # Cross-Site Scripting (XSS)
+  xss:
+    enabled: true
+    test_reflection: true
+    test_dom: true
+    max_payloads_per_param: 5
+    
+  # SQL Injection
+  sqli:
+    enabled: true
+    test_error_based: true
+    test_time_based: true
+    time_delay: 3
+    max_payloads_per_param: 5
+    
+  # Cross-Site Request Forgery (CSRF)
+  csrf:
+    enabled: true
+    
+  # Cabeçalhos de segurança
+  headers:
+    enabled: true
+    check_missing_headers: true
+    check_cors: true
+    
+  # Escaneamento de portas
+  port:
+    enabled: true
+    ports: [21, 22, 23, 25, 53, 80, 110, 143, 443, 465, 587, 993, 995, 1433, 3306, 3389, 5432, 8080, 8443]
+    timeout: 1
+    
+  # Coleta de informações
+  info:
+    enabled: true
+    check_metadata: true
+    check_comments: true
+    check_technologies: true
+
+# Filtros de escaneamento
+filters:
+  # Extensões de arquivo a serem ignoradas durante o crawling
+  exclude_extensions: [
+    "jpg", "jpeg", "png", "gif", "bmp", "svg", "webp",
+    "mp3", "wav", "ogg", "mp4", "webm", "avi", "mov",
+    "wmv", "flv", "pdf", "doc", "docx", "xls", "xlsx",
+    "ppt", "pptx", "zip", "rar", "tar", "gz"
+  ]
+  
+  # Diretórios a serem ignorados durante o crawling
+  exclude_directories: [
+    "/assets/", "/static/", "/images/", "/img/", 
+    "/css/", "/js/", "/fonts/", "/media/", 
+    "/download/", "/uploads/"
+  ]
+  
+  # Parâmetros a serem ignorados na análise
+  exclude_parameters: [
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "fb_action_ids", "fb_action_types", "fb_ref", "fb_source",
+    "gclid", "cx", "ie", "cof", "siteurl", "ref"
+  ]
+
+# Configurações de relatório
+report:
+  include_evidence: true
+  include_recommendations: true
+  include_cwe: true
+  include_remediation: true
+
+# Configurações de proxy
+proxy:
+  enabled: false
+  http: ""
+  https: ""
+  username: ""
+  password: "" 
