@@ -36,6 +36,70 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Console para saída formatada
 console = Console()
 
+class WebSp1der:
+    """Classe principal do WebSp1der para facilitar a integração com outras aplicações."""
+    
+    def __init__(self, config=None):
+        """
+        Inicializa o WebSp1der.
+        
+        Args:
+            config (dict, opcional): Configurações personalizadas
+        """
+        self.config = config or self.load_default_config()
+    
+    def load_default_config(self):
+        """Carrega a configuração padrão."""
+        default_config_path = os.path.join(os.path.dirname(__file__), 'config', 'default.yaml')
+        if os.path.exists(default_config_path):
+            with open(default_config_path, 'r') as f:
+                return yaml.safe_load(f)
+        else:
+            logger.warning("Arquivo de configuração padrão não encontrado. Usando configurações base.")
+            return {
+                'general': {
+                    'threads': 5,
+                    'timeout': 10,
+                    'max_depth': 3
+                }
+            }
+    
+    def scan(self, url, scan_type='full', proxies=None, threads=None, timeout=None):
+        """
+        Executa o escaneamento em uma URL alvo.
+        
+        Args:
+            url (str): URL alvo para análise
+            scan_type (str): Tipo de análise (basic, full, custom)
+            proxies (dict, opcional): Configuração de proxy
+            threads (int, opcional): Número de threads para análise paralela
+            timeout (int, opcional): Timeout para requisições
+            
+        Returns:
+            dict: Resultados do escaneamento
+        """
+        config = self.config.copy()
+        
+        # Sobrescrever configurações se especificadas
+        if threads:
+            config['general']['threads'] = threads
+        if timeout:
+            config['general']['timeout'] = timeout
+        
+        # Iniciar scanner
+        scanner = Scanner(
+            url=url,
+            scan_type=scan_type,
+            threads=config['general'].get('threads', 5),
+            proxy=proxies['http'] if proxies and 'http' in proxies else None,
+            config=config
+        )
+        
+        # Executar verificações sem barra de progresso
+        results = scanner.run()
+        
+        return results
+
 def print_banner():
     """Exibe o banner da aplicação."""
     banner = r"""
@@ -110,18 +174,32 @@ def main():
         console.print(f"[bold cyan]Iniciando análise em:[/] [bold yellow]{args.url}[/]")
         console.print(f"[bold cyan]Modo de análise:[/] [bold yellow]{args.analyze}[/]")
         
-        # Iniciar scanner
-        scanner = Scanner(
-            url=args.url,
-            scan_type=args.analyze,
-            threads=args.threads,
-            proxy=args.proxy,
-            config=config
-        )
+        # Configurar proxy
+        proxies = None
+        if args.proxy:
+            proxies = {
+                'http': args.proxy,
+                'https': args.proxy
+            }
         
-        # Executar verificações
+        # Usar a classe WebSp1der
+        webspider = WebSp1der(config)
+        results = None
+        
+        # Executar verificações com barra de progresso
         with Progress() as progress:
             task = progress.add_task("[cyan]Analisando...", total=100)
+            
+            # Iniciar scanner
+            scanner = Scanner(
+                url=args.url,
+                scan_type=args.analyze,
+                threads=args.threads,
+                proxy=args.proxy,
+                config=config
+            )
+            
+            # Executar verificações
             results = scanner.run(progress, task)
         
         # Gerar relatório

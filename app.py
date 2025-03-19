@@ -22,7 +22,6 @@ sys.path.append(str(root_dir))
 
 # Importar o WebSp1der e seus componentes
 from websp1der import WebSp1der
-from modules.utils.config_manager import ConfigManager
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.secret_key = os.urandom(24)
@@ -60,10 +59,14 @@ def start_scan():
             'https': proxy
         }
     
-    # Criar configuração
-    config = ConfigManager().get_config()
-    config['general']['threads'] = threads
-    config['general']['timeout'] = timeout
+    # Criar configuração básica
+    config = {
+        'general': {
+            'threads': threads,
+            'timeout': timeout,
+            'max_depth': 3
+        }
+    }
     
     # Iniciar escaneamento em uma thread separada
     scan_status[scan_id] = {'status': 'running', 'progress': 0}
@@ -144,6 +147,11 @@ if __name__ == '__main__':
     os.makedirs('static', exist_ok=True)
     os.makedirs('static/css', exist_ok=True)
     os.makedirs('static/js', exist_ok=True)
+    os.makedirs('reports', exist_ok=True)
+    
+    print("* WebSp1der Interface Web")
+    print("* Escaneamento real de vulnerabilidades")
+    print("* Acesse: http://localhost:5000")
     
     # Iniciar servidor
     app.run(debug=True, host='0.0.0.0', port=5000) 
