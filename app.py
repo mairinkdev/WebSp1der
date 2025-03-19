@@ -1,157 +1,100 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-WebSp1der - Interface Web
+WebSp1der - Versão sem interface
 Desenvolvido por: mairinkdev (https://github.com/mairinkdev)
 """
 
-import os
-import json
-import threading
-import time
-from flask import Flask, render_template, request, jsonify, session
-
-# Importar o WebSp1der
-import importlib.util
 import sys
-from pathlib import Path
-
-# Garantir que o diretório raiz está no path
-root_dir = Path(__file__).parent.absolute()
-sys.path.append(str(root_dir))
-
-# Importar o WebSp1der e seus componentes
+import os
+import argparse
 from websp1der import WebSp1der
 
-app = Flask(__name__, static_folder='static', template_folder='templates')
-app.secret_key = os.urandom(24)
-
-# Armazenar resultados de escaneamento
-scan_results = {}
-scan_status = {}
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/start_scan', methods=['POST'])
-def start_scan():
-    # Obter dados do formulário
-    target_url = request.form.get('url')
-    scan_type = request.form.get('scan_type', 'full')
-    threads = int(request.form.get('threads', 10))
-    timeout = int(request.form.get('timeout', 10))
-    proxy = request.form.get('proxy', '')
-    
-    # Validar URL
-    if not target_url.startswith(('http://', 'https://')):
-        return jsonify({'status': 'error', 'message': 'URL inválida! Use http:// ou https://'})
-    
-    # Gerar ID único para este escaneamento
-    scan_id = str(int(time.time()))
-    session['scan_id'] = scan_id
-    
-    # Configurar proxy se fornecido
-    proxies = None
-    if proxy:
-        proxies = {
-            'http': proxy,
-            'https': proxy
-        }
-    
-    # Criar configuração básica
-    config = {
-        'general': {
-            'threads': threads,
-            'timeout': timeout,
-            'max_depth': 3
-        }
-    }
-    
-    # Iniciar escaneamento em uma thread separada
-    scan_status[scan_id] = {'status': 'running', 'progress': 0}
-    scan_thread = threading.Thread(
-        target=run_scan, 
-        args=(target_url, scan_type, proxies, config, scan_id)
+def parse_arguments():
+    """Parse os argumentos da linha de comando."""
+    parser = argparse.ArgumentParser(
+        description='WebSp1der - Ferramenta de análise de vulnerabilidades web',
+        formatter_class=argparse.RawTextHelpFormatter
     )
-    scan_thread.daemon = True
-    scan_thread.start()
     
-    return jsonify({
-        'status': 'success', 
-        'message': 'Escaneamento iniciado!',
-        'scan_id': scan_id
-    })
+    parser.add_argument('-u', '--url', required=True, help='URL alvo para análise')
+    parser.add_argument('-a', '--analyze', default='basic', 
+                        choices=['basic', 'full', 'custom', 'xss', 'sqli', 'headers', 'port', 'csrf', 'info'],
+                        help='Tipo de análise')
+    parser.add_argument('-o', '--output', help='Arquivo de saída para o relatório')
+    parser.add_argument('-t', '--threads', type=int, default=5,
+                        help='Número de threads para análise paralela')
+    parser.add_argument('-p', '--proxy', help='Usar proxy (formato: http://host:porta)')
+    parser.add_argument('-c', '--config', help='Arquivo de configuração personalizado')
+    
+    return parser.parse_args()
 
-def run_scan(url, scan_type, proxies, config, scan_id):
+def main():
+    """Função principal do programa."""
+    args = parse_arguments()
+    
+    # Configurar proxy
+    proxies = None
+    if args.proxy:
+        proxies = {
+            'http': args.proxy,
+            'https': args.proxy
+        }
+    
+    print("WebSp1der - Iniciando escaneamento simples (sem interface)")
+    print(f"URL alvo: {args.url}")
+    print(f"Tipo de análise: {args.analyze}")
+    
     try:
-        # Inicializar o scanner
-        scanner = WebSp1der(config)
+        # Usar a classe WebSp1der
+        webspider = WebSp1der()
         
         # Executar o escaneamento
-        results = scanner.scan(url, scan_type=scan_type, proxies=proxies)
+        results = webspider.scan(
+            url=args.url, 
+            scan_type=args.analyze,
+            proxies=proxies,
+            threads=args.threads
+        )
         
-        # Armazenar resultados
-        scan_results[scan_id] = results
-        scan_status[scan_id] = {'status': 'completed', 'progress': 100}
+        # Exibir resultados
+        vulnerabilities = results.get('vulnerabilities', [])
+        total_vulns = len(vulnerabilities)
+        
+        print("\n=== RESULTADOS ===")
+        print(f"Total de vulnerabilidades encontradas: {total_vulns}")
+        
+        # Contagem por severidade
+        severity_count = {"Crítica": 0, "Alta": 0, "Média": 0, "Baixa": 0, "Informativa": 0}
+        for vuln in vulnerabilities:
+            if vuln['severity'] == 'critical':
+                severity_count["Crítica"] += 1
+            elif vuln['severity'] == 'high':
+                severity_count["Alta"] += 1
+            elif vuln['severity'] == 'medium':
+                severity_count["Média"] += 1
+            elif vuln['severity'] == 'low':
+                severity_count["Baixa"] += 1
+            elif vuln['severity'] == 'info':
+                severity_count["Informativa"] += 1
+        
+        for sev, count in severity_count.items():
+            print(f"{sev}: {count}")
+        
+        # Salvar relatório se solicitado
+        if args.output:
+            import json
+            os.makedirs(os.path.dirname(args.output) or '.', exist_ok=True)
+            with open(args.output, 'w', encoding='utf-8') as f:
+                json.dump(results, f, indent=4, ensure_ascii=False)
+            print(f"\nRelatório salvo em: {args.output}")
+            
+    except KeyboardInterrupt:
+        print("\nAnálise interrompida pelo usuário.")
+        sys.exit(1)
     except Exception as e:
-        scan_status[scan_id] = {
-            'status': 'error', 
-            'progress': 0, 
-            'message': str(e)
-        }
+        print(f"Erro: {str(e)}")
+        sys.exit(1)
 
-@app.route('/scan_status')
-def get_scan_status():
-    scan_id = session.get('scan_id')
-    if not scan_id or scan_id not in scan_status:
-        return jsonify({'status': 'unknown'})
-    
-    return jsonify(scan_status[scan_id])
-
-@app.route('/scan_results')
-def get_scan_results():
-    scan_id = session.get('scan_id')
-    if not scan_id or scan_id not in scan_results:
-        return jsonify({'status': 'no_results'})
-    
-    return jsonify({
-        'status': 'success',
-        'results': scan_results[scan_id]
-    })
-
-@app.route('/export_report', methods=['POST'])
-def export_report():
-    scan_id = session.get('scan_id')
-    if not scan_id or scan_id not in scan_results:
-        return jsonify({'status': 'error', 'message': 'Nenhum resultado disponível'})
-    
-    report_format = request.form.get('format', 'json')
-    report_filename = f"websp1der_report_{scan_id}.{report_format}"
-    report_path = os.path.join('reports', report_filename)
-    
-    os.makedirs('reports', exist_ok=True)
-    
-    with open(report_path, 'w', encoding='utf-8') as f:
-        json.dump(scan_results[scan_id], f, indent=4, ensure_ascii=False)
-    
-    return jsonify({
-        'status': 'success',
-        'message': f'Relatório salvo como {report_filename}',
-        'filename': report_filename
-    })
-
-if __name__ == '__main__':
-    # Criar pastas necessárias
-    os.makedirs('templates', exist_ok=True)
-    os.makedirs('static', exist_ok=True)
-    os.makedirs('static/css', exist_ok=True)
-    os.makedirs('static/js', exist_ok=True)
-    os.makedirs('reports', exist_ok=True)
-    
-    print("* WebSp1der Interface Web")
-    print("* Escaneamento real de vulnerabilidades")
-    print("* Acesse: http://localhost:5000")
-    
-    # Iniciar servidor
-    app.run(debug=True, host='0.0.0.0', port=5000) 
+if __name__ == "__main__":
+    main() 
