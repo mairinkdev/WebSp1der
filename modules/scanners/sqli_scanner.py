@@ -9,175 +9,86 @@ import logging
 import re
 import time
 import requests
-from urllib.parse import urljoin, parse_qs, urlparse, urlencode
-from ..utils import Utils
+from urllib.parse import urljoin, parse_qs, urlparse
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger('websp1der.scanners.sqli')
 
-class SQLIScanner:
+class SQLiScanner:
     """Scanner para detecção de vulnerabilidades de SQL Injection."""
-    
-    def __init__(self):
+
+    def __init__(self, url=None, threads=5, timeout=10, session=None):
         """Inicializa o scanner de SQL Injection."""
         self.name = "SQL Injection Scanner"
         self.description = "Scanner para detecção de vulnerabilidades de SQL Injection"
+        self.target_url = url
+        self.threads = threads
+        self.timeout = timeout
+        self.session = session or requests.Session()
         
         # Payloads para teste de SQL Injection
         self.payloads = [
-            "' OR '1'='1",
-            "' OR '1'='1' --",
-            "' OR '1'='1' /*",
-            "\" OR \"1\"=\"1",
-            "\" OR \"1\"=\"1\" --",
-            "\" OR \"1\"=\"1\" /*",
             "1' OR '1'='1",
-            "1\" OR \"1\"=\"1",
-            "' OR 1=1 --",
-            "\" OR 1=1 --",
-            "' OR '1'='1' UNION SELECT 1,2,3 --",
-            "1; SELECT 1,2,3 --",
-            "1' AND (SELECT 4949 FROM(SELECT COUNT(*),CONCAT(0x7176707a71,(SELECT (ELT(4949=4949,1))),0x716a786b71,FLOOR(RAND(0)*2))x FROM INFORMATION_SCHEMA.PLUGINS GROUP BY x)a) AND '1'='1",
-            "1' AND SLEEP(3) AND '1'='1",
-            "1\" AND SLEEP(3) AND \"1\"=\"1"
+            "1' OR '1'='1' --",
+            "1' OR '1'='1' #",
+            "1' OR '1'='1'/*",
+            "1') OR ('1'='1",
+            "1')) OR (('1'='1",
+            "admin' --",
+            "admin' #",
+            "admin'/*",
+            "admin' OR '1'='1",
+            "admin' OR '1'='1' --",
+            "admin' OR '1'='1' #",
+            "admin' OR '1'='1'/*",
+            "admin') OR ('1'='1",
+            "admin')) OR (('1'='1"
         ]
         
-        # Padrões para detectar mensagens de erro de banco de dados
+        # Payloads para teste de SQL Injection baseado em tempo
+        self.time_payloads = [
+            "1' SLEEP(5) --",
+            "1' WAITFOR DELAY '0:0:5' --",
+            "1' DELAY '0:0:5' --",
+            "1' pg_sleep(5) --",
+            "1' AND (SELECT * FROM (SELECT SLEEP(5)) as t) --",
+            "1' AND 5=(SELECT 5 FROM PG_SLEEP(5)) --"
+        ]
+        
+        # Padrões para detecção de erros de SQL
         self.error_patterns = [
-            # MySQL
-            r"SQL syntax.*MySQL",
-            r"Warning.*mysql_.*",
-            r"MySQLSyntaxErrorException",
-            r"valid MySQL result",
-            r"check the manual that corresponds to your (MySQL|MariaDB) server version",
-            r"MySqlException",
-            r"MySQLSyntaxErrorException",
-            
-            # PostgreSQL
-            r"PostgreSQL.*ERROR",
-            r"Warning.*\Wpg_.*",
-            r"valid PostgreSQL result",
-            r"Npgsql\.",
-            r"PG::SyntaxError:",
-            r"org\.postgresql\.util\.PSQLException",
-            
-            # Microsoft SQL Server
-            r"Driver.* SQL[\-\_\ ]*Server",
-            r"OLE DB.* SQL Server",
-            r"(\W|\A)SQL Server.*Driver",
-            r"Warning.*mssql_.*",
-            r"(\W|\A)SQL Server.*[0-9a-fA-F]{8}",
-            r"(?s)Exception.*\WSystem\.Data\.SqlClient\.",
-            r"(?s)Exception.*\WRoadhouse\.Cms\.",
-            r"Microsoft SQL Native Client error '[0-9a-fA-F]{8}",
-            r"com\.microsoft\.sqlserver\.jdbc\.SQLServerException",
-            
-            # Oracle
-            r"\bORA-[0-9][0-9][0-9][0-9]",
-            r"Oracle error",
-            r"Oracle.*Driver",
-            r"Warning.*\Woci_.*",
-            r"Warning.*\Wora_.*",
-            r"oracle\.jdbc\.driver",
-            
-            # SQLite
+            r"SQL syntax.*?MySQL",
+            r"Warning.*?mysqli",
+            r"unclosed quotation mark after the character string",
+            r"Microsoft OLE DB Provider for SQL Server",
+            r"Unclosed quotation mark",
+            r"You have an error in your SQL syntax",
             r"SQLite/JDBCDriver",
-            r"SQLite\.Exception",
-            r"System\.Data\.SQLite\.SQLiteException",
-            r"Warning.*sqlite_.*",
-            r"Warning.*SQLite3::",
-            r"\[SQLITE_ERROR\]",
-            
-            # Genéricos
-            r"SQL syntax.*",
-            r"syntax error\s*near",
-            r"incorrect syntax near",
-            r"unexpected end of SQL command",
-            r"Warning.*SQL",
-            r"SQL command not properly ended",
-            r"ERROR:\s*syntax error",
-            r"FATAL:\s*",
-            r"sqlite3\.OperationalError:",
-            r"Unclosed quotation mark after the character string",
-            r"DB2 SQL error:",
-            r"ODBC SQL error:",
-            r"Sybase message:"
+            r"SQLServer JDBC Driver",
+            r"Syntax error or access violation",
+            r"ORA-[0-9]{5}",
+            r"Microsoft Access Driver",
+            r"PostgreSQL.*?ERROR"
         ]
-        
-        # Time delay em segundos para testar injeção baseada em tempo
-        self.time_delay = 3
-    
-    def detect_error_based(self, response_text):
+
+    def check_response_for_errors(self, response_text):
         """
-        Detecta mensagens de erro de banco de dados na resposta.
+        Verifica se a resposta contém erros SQL.
         
         Args:
             response_text (str): Texto da resposta HTTP
             
         Returns:
-            bool: True se foi detectada mensagem de erro, False caso contrário
+            bool: True se for detectado erro SQL, False caso contrário
         """
         for pattern in self.error_patterns:
             if re.search(pattern, response_text, re.IGNORECASE):
                 return True
         return False
-    
-    def detect_time_based(self, url, params, param_name, proxies=None, headers=None):
-        """
-        Detecta vulnerabilidades baseadas em tempo (time-based blind SQL injection).
-        
-        Args:
-            url (str): URL para testar
-            params (dict): Parâmetros da requisição
-            param_name (str): Nome do parâmetro a testar
-            proxies (dict, opcional): Configuração de proxy
-            headers (dict, opcional): Cabeçalhos HTTP
-            
-        Returns:
-            bool: True se foi detectada injeção baseada em tempo, False caso contrário
-        """
-        # Criar payloads específicos para injeção baseada em tempo
-        time_payloads = [
-            f"' AND SLEEP({self.time_delay}) --",
-            f"\" AND SLEEP({self.time_delay}) --",
-            f"' AND (SELECT {self.time_delay} FROM DUAL) --",
-            f"\" AND (SELECT {self.time_delay} FROM DUAL) --",
-            f"1; WAITFOR DELAY '0:0:{self.time_delay}' --"
-        ]
-        
-        for payload in time_payloads:
-            # Fazer uma cópia dos parâmetros e modificar o valor do parâmetro atual
-            test_params = params.copy()
-            test_params[param_name] = payload
-            
-            try:
-                start_time = time.time()
-                
-                response = requests.get(
-                    url,
-                    params=test_params,
-                    headers=headers,
-                    proxies=proxies,
-                    timeout=self.time_delay + 5,  # Timeout um pouco maior que o delay
-                    verify=False  # Desabilitar verificação SSL para testes
-                )
-                
-                execution_time = time.time() - start_time
-                
-                # Se o tempo de execução for próximo ou maior que o delay configurado
-                if execution_time >= self.time_delay:
-                    return True
-                    
-            except requests.Timeout:
-                # Um timeout também pode indicar uma injeção bem-sucedida
-                return True
-            except requests.RequestException:
-                continue
-                
-        return False
-    
+
     def test_url_params(self, url, proxies=None, headers=None):
         """
-        Testa parâmetros da URL para vulnerabilidades de SQL Injection.
+        Testa vulnerabilidades SQL Injection em parâmetros de URL.
         
         Args:
             url (str): URL para testar
@@ -188,91 +99,151 @@ class SQLIScanner:
             list: Lista de vulnerabilidades encontradas
         """
         vulnerabilities = []
-        
-        # Verificar se a URL tem parâmetros
         parsed_url = urlparse(url)
-        query_params = parse_qs(parsed_url.query)
+        params = parse_qs(parsed_url.query)
         
-        if not query_params:
+        if not params:
             return vulnerabilities
+            
+        logger.debug(f"Testando SQLi em parâmetros da URL: {url}")
         
-        logger.debug(f"Testando parâmetros da URL para SQL Injection: {url}")
-        
-        # Testar cada parâmetro com cada payload
-        for param_name, param_values in query_params.items():
-            # Testar injeção baseada em erro
+        # Para cada parâmetro na URL
+        for param, values in params.items():
+            original_value = values[0] if values else ''
+            
+            # Testar com diferentes payloads
             for payload in self.payloads:
-                # Criar uma cópia dos parâmetros e modificar o valor do parâmetro atual
-                test_params = query_params.copy()
-                test_params[param_name] = [payload]
+                # Construir nova URL com o payload
+                new_params = params.copy()
+                new_params[param] = [payload]
                 
-                # Reconstruir a URL com o novo parâmetro
-                test_url_parts = list(parsed_url)
-                test_url_parts[4] = urlencode(test_params, doseq=True)
-                test_url = urlparse('').geturl()
+                query_string = '&'.join([f"{k}={v[0]}" for k, v in new_params.items()])
+                test_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}?{query_string}"
                 
                 try:
-                    response = requests.get(
+                    # Fazer a requisição
+                    response = self.session.get(
                         test_url,
                         headers=headers,
                         proxies=proxies,
-                        timeout=10,
-                        verify=False  # Desabilitar verificação SSL para testes
+                        timeout=self.timeout,
+                        verify=False
                     )
                     
-                    # Verificar se há mensagens de erro de SQL na resposta
-                    if self.detect_error_based(response.text):
+                    # Verificar se o SQLi baseado em erro foi bem-sucedido
+                    if self.check_response_for_errors(response.text):
+                        logger.warning(f"SQLi baseado em erro encontrado em {url}, parâmetro: {param}")
+                        
+                        # Criar relatório de vulnerabilidade
                         vulnerability = {
-                            'type': 'sql_injection',
+                            'type': 'sqli',
                             'name': 'SQL Injection',
-                            'severity': 'critical',
-                            'location': f"{url} (parâmetro: {param_name})",
-                            'description': f"O parâmetro '{param_name}' é vulnerável a ataques de injeção SQL.",
-                            'evidence': f"Payload usado: {payload}\nDetectadas mensagens de erro de SQL na resposta.",
-                            'cwe_id': 'CWE-89',
-                            'remediation': """
-                            1. Use consultas parametrizadas ou prepared statements.
-                            2. Utilize ORM (Object-Relational Mapping) quando possível.
-                            3. Valide e sanitize todas as entradas de usuário.
-                            4. Implemente o princípio do privilégio mínimo no banco de dados.
-                            5. Configure corretamente as mensagens de erro para não vazarem informações sensíveis.
+                            'url': url,
+                            'parameter': param,
+                            'payload': payload,
+                            'severity': 'high',
+                            'description': f"O parâmetro '{param}' é vulnerável a SQL Injection",
+                            'details': "A aplicação retorna mensagens de erro SQL quando injetado payload malicioso",
+                            'recommendation': """
+                            Para prevenir vulnerabilidades de SQL Injection:
+                            1. Usar consultas parametrizadas ou prepared statements.
+                            2. Usar ORM (Object-Relational Mapping) com escape automático.
+                            3. Validar e sanitizar todas as entradas de usuário.
+                            4. Implementar princípio de menor privilégio no banco de dados.
+                            5. Usar WAF (Web Application Firewall) como camada extra de proteção.
                             """
                         }
                         vulnerabilities.append(vulnerability)
                         break  # Pular para o próximo parâmetro após encontrar vulnerabilidade
                         
                 except requests.RequestException as e:
-                    logger.error(f"Erro ao testar SQL Injection em {test_url}: {str(e)}")
+                    logger.error(f"Erro ao testar SQLi na URL {url}: {str(e)}")
                     continue
             
-            # Se não encontrou vulnerabilidade baseada em erro, tentar baseada em tempo
-            if not any(vuln['location'].endswith(f"parâmetro: {param_name})") for vuln in vulnerabilities):
-                flat_params = {k: v[0] if isinstance(v, list) and len(v) > 0 else v for k, v in query_params.items()}
-                
-                if self.detect_time_based(url, flat_params, param_name, proxies, headers):
-                    vulnerability = {
-                        'type': 'sql_injection',
-                        'name': 'Blind SQL Injection (Time-based)',
-                        'severity': 'critical',
-                        'location': f"{url} (parâmetro: {param_name})",
-                        'description': f"O parâmetro '{param_name}' é vulnerável a ataques de injeção SQL baseada em tempo.",
-                        'evidence': f"Detectado atraso na resposta ao utilizar payload de injeção SQL com time delay.",
-                        'cwe_id': 'CWE-89',
-                        'remediation': """
-                        1. Use consultas parametrizadas ou prepared statements.
-                        2. Utilize ORM (Object-Relational Mapping) quando possível.
-                        3. Valide e sanitize todas as entradas de usuário.
-                        4. Implemente o princípio do privilégio mínimo no banco de dados.
-                        5. Implemente limites de tempo para consultas ao banco de dados.
-                        """
-                    }
-                    vulnerabilities.append(vulnerability)
+            # Se não encontrou SQLi baseado em erro, testar time-based
+            if not any(v for v in vulnerabilities if v['parameter'] == param and v['type'] == 'sqli'):
+                # Testar payloads baseados em tempo
+                for payload in self.time_payloads:
+                    # Construir nova URL com o payload
+                    new_params = params.copy()
+                    new_params[param] = [payload]
+                    
+                    query_string = '&'.join([f"{k}={v[0]}" for k, v in new_params.items()])
+                    test_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}?{query_string}"
+                    
+                    try:
+                        # Medir tempo de resposta
+                        start_time = time.time()
+                        response = self.session.get(
+                            test_url,
+                            headers=headers,
+                            proxies=proxies,
+                            timeout=max(self.timeout, 10),  # Aumentar timeout para detectar delay
+                            verify=False
+                        )
+                        end_time = time.time()
+                        
+                        # Se a resposta demorou mais de 4 segundos, pode ser vulnerável
+                        if end_time - start_time > 4:
+                            logger.warning(f"SQLi baseado em tempo encontrado em {url}, parâmetro: {param}")
+                            
+                            # Criar relatório de vulnerabilidade
+                            vulnerability = {
+                                'type': 'sqli_time',
+                                'name': 'SQL Injection (Time-Based)',
+                                'url': url,
+                                'parameter': param,
+                                'payload': payload,
+                                'severity': 'high',
+                                'description': f"O parâmetro '{param}' é vulnerável a SQL Injection baseado em tempo",
+                                'details': f"Tempo de resposta: {end_time - start_time:.2f} segundos",
+                                'recommendation': """
+                                Para prevenir vulnerabilidades de SQL Injection:
+                                1. Usar consultas parametrizadas ou prepared statements.
+                                2. Usar ORM (Object-Relational Mapping) com escape automático.
+                                3. Validar e sanitizar todas as entradas de usuário.
+                                4. Implementar princípio de menor privilégio no banco de dados.
+                                5. Usar WAF (Web Application Firewall) como camada extra de proteção.
+                                """
+                            }
+                            vulnerabilities.append(vulnerability)
+                            break  # Pular para o próximo parâmetro após encontrar vulnerabilidade
+                            
+                    except requests.Timeout:
+                        # Timeout também pode indicar vulnerabilidade time-based
+                        logger.warning(f"Possível SQLi baseado em tempo (timeout) em {url}, parâmetro: {param}")
+                        
+                        # Criar relatório de vulnerabilidade
+                        vulnerability = {
+                            'type': 'sqli_time',
+                            'name': 'SQL Injection (Time-Based)',
+                            'url': url,
+                            'parameter': param,
+                            'payload': payload,
+                            'severity': 'high',
+                            'description': f"O parâmetro '{param}' é vulnerável a SQL Injection baseado em tempo",
+                            'details': "A requisição excedeu o tempo limite, indicando possível execução de comando SLEEP",
+                            'recommendation': """
+                            Para prevenir vulnerabilidades de SQL Injection:
+                            1. Usar consultas parametrizadas ou prepared statements.
+                            2. Usar ORM (Object-Relational Mapping) com escape automático.
+                            3. Validar e sanitizar todas as entradas de usuário.
+                            4. Implementar princípio de menor privilégio no banco de dados.
+                            5. Usar WAF (Web Application Firewall) como camada extra de proteção.
+                            """
+                        }
+                        vulnerabilities.append(vulnerability)
+                        break  # Pular para o próximo parâmetro após encontrar vulnerabilidade
+                        
+                    except requests.RequestException as e:
+                        logger.error(f"Erro ao testar SQLi time-based na URL {url}: {str(e)}")
+                        continue
         
         return vulnerabilities
-    
+
     def test_form(self, form, proxies=None, headers=None):
         """
-        Testa formulários para vulnerabilidades de SQL Injection.
+        Testa vulnerabilidades SQL Injection em formulários.
         
         Args:
             form (dict): Informações do formulário
@@ -284,235 +255,118 @@ class SQLIScanner:
         """
         vulnerabilities = []
         
+        if not form or 'inputs' not in form or not form['inputs']:
+            return vulnerabilities
+        
+        logger.debug(f"Testando SQLi em formulário: {form.get('url')}")
+        
+        # Obter detalhes do formulário
         form_url = form.get('url', '')
         form_action = form.get('action', '')
         form_method = form.get('method', 'get').lower()
-        form_inputs = form.get('inputs', [])
         
-        if not form_url or not form_inputs:
-            return vulnerabilities
-        
-        # Resolver URL completa da ação do formulário
-        if form_action:
-            action_url = urljoin(form_url, form_action)
+        # Construir URL de ação
+        if form_action.startswith('http'):
+            action_url = form_action
+        elif form_action.startswith('/'):
+            parsed_url = urlparse(form_url)
+            action_url = f"{parsed_url.scheme}://{parsed_url.netloc}{form_action}"
         else:
-            action_url = form_url
+            action_url = urljoin(form_url, form_action) if form_action else form_url
         
-        logger.debug(f"Testando formulário para SQL Injection: {action_url}")
-        
-        # Testar cada campo de entrada com cada payload
-        for input_field in form_inputs:
-            field_name = input_field.get('name', '')
-            field_type = input_field.get('type', '').lower()
+        # Para cada campo no formulário
+        for field in form['inputs']:
+            field_name = field.get('name', '')
+            field_type = field.get('type', '')
             
-            # Ignorar campos ocultos, senhas, arquivos, etc.
-            if not field_name or field_type in ['hidden', 'password', 'file', 'submit', 'button']:
+            # Ignorar campos de senha, arquivos, botões, etc.
+            if field_type in ['password', 'file', 'submit', 'button', 'image', 'reset']:
                 continue
             
-            # Testar injeção baseada em erro
+            # Testar com diferentes payloads
             for payload in self.payloads:
                 # Preparar dados do formulário
                 form_data = {}
-                
-                # Preencher todos os campos com valores simulados
-                for input_item in form_inputs:
-                    item_name = input_item.get('name', '')
-                    item_type = input_item.get('type', '').lower()
-                    
-                    if not item_name:
-                        continue
-                    
-                    if item_name == field_name:
-                        form_data[item_name] = payload
+                for input_field in form['inputs']:
+                    input_name = input_field.get('name', '')
+                    # Se for o campo que estamos testando, use o payload
+                    if input_name == field_name:
+                        form_data[input_name] = payload
+                    # Caso contrário, use um valor padrão baseado no tipo
+                    elif input_field.get('type') == 'email':
+                        form_data[input_name] = 'test@example.com'
                     else:
-                        # Preencher outros campos com valores padrão
-                        if item_type == 'email':
-                            form_data[item_name] = 'test@example.com'
-                        elif item_type == 'number':
-                            form_data[item_name] = '123'
-                        elif item_type in ['checkbox', 'radio']:
-                            form_data[item_name] = 'on'
-                        else:
-                            form_data[item_name] = 'test'
+                        form_data[input_name] = 'test123'
                 
                 try:
                     # Enviar o formulário
                     if form_method == 'post':
-                        response = requests.post(
+                        response = self.session.post(
                             action_url,
                             data=form_data,
                             headers=headers,
                             proxies=proxies,
-                            timeout=10,
-                            verify=False  # Desabilitar verificação SSL para testes
+                            timeout=self.timeout,
+                            verify=False
                         )
-                    else:  # GET
-                        response = requests.get(
+                    else:  # método GET
+                        response = self.session.get(
                             action_url,
                             params=form_data,
                             headers=headers,
                             proxies=proxies,
-                            timeout=10,
-                            verify=False  # Desabilitar verificação SSL para testes
+                            timeout=self.timeout,
+                            verify=False
                         )
                     
-                    # Verificar se há mensagens de erro de SQL na resposta
-                    if self.detect_error_based(response.text):
+                    # Verificar se o SQLi foi bem-sucedido
+                    if self.check_response_for_errors(response.text):
+                        logger.warning(f"SQLi encontrado em formulário {action_url}, campo: {field_name}")
+                        
+                        # Criar relatório de vulnerabilidade
                         vulnerability = {
-                            'type': 'sql_injection',
-                            'name': 'SQL Injection',
-                            'severity': 'critical',
-                            'location': f"Formulário em {form_url} (campo: {field_name})",
-                            'description': f"O campo '{field_name}' do formulário é vulnerável a ataques de injeção SQL.",
-                            'evidence': f"Payload usado: {payload}\nDetectadas mensagens de erro de SQL na resposta.",
-                            'cwe_id': 'CWE-89',
-                            'remediation': """
-                            1. Use consultas parametrizadas ou prepared statements.
-                            2. Utilize ORM (Object-Relational Mapping) quando possível.
-                            3. Valide e sanitize todas as entradas de usuário.
-                            4. Implemente o princípio do privilégio mínimo no banco de dados.
-                            5. Configure corretamente as mensagens de erro para não vazarem informações sensíveis.
+                            'type': 'sqli',
+                            'name': 'SQL Injection em Formulário',
+                            'url': action_url,
+                            'parameter': field_name,
+                            'payload': payload,
+                            'severity': 'high',
+                            'description': f"O campo '{field_name}' no formulário é vulnerável a SQL Injection",
+                            'details': "O formulário retorna mensagens de erro SQL quando injetado payload malicioso",
+                            'recommendation': """
+                            Para prevenir vulnerabilidades de SQL Injection:
+                            1. Usar consultas parametrizadas ou prepared statements.
+                            2. Usar ORM (Object-Relational Mapping) com escape automático.
+                            3. Validar e sanitizar todas as entradas de usuário.
+                            4. Implementar princípio de menor privilégio no banco de dados.
+                            5. Usar WAF (Web Application Firewall) como camada extra de proteção.
                             """
                         }
                         vulnerabilities.append(vulnerability)
                         break  # Pular para o próximo campo após encontrar vulnerabilidade
                         
                 except requests.RequestException as e:
-                    logger.error(f"Erro ao testar SQL Injection em formulário {action_url}: {str(e)}")
+                    logger.error(f"Erro ao testar SQLi em formulário {action_url}: {str(e)}")
                     continue
-            
-            # Se não encontrou vulnerabilidade baseada em erro, tentar baseada em tempo
-            if not any(vuln['location'].endswith(f"campo: {field_name})") for vuln in vulnerabilities):
-                # Preparar dados do formulário para o teste baseado em tempo
-                base_form_data = {}
-                
-                # Preencher todos os campos com valores simulados
-                for input_item in form_inputs:
-                    item_name = input_item.get('name', '')
-                    item_type = input_item.get('type', '').lower()
-                    
-                    if not item_name:
-                        continue
-                    
-                    # Preencher campos com valores padrão para o teste de tempo
-                    if item_type == 'email':
-                        base_form_data[item_name] = 'test@example.com'
-                    elif item_type == 'number':
-                        base_form_data[item_name] = '123'
-                    elif item_type in ['checkbox', 'radio']:
-                        base_form_data[item_name] = 'on'
-                    else:
-                        base_form_data[item_name] = 'test'
-                
-                # Testar injeção baseada em tempo
-                time_payloads = [
-                    f"' AND SLEEP({self.time_delay}) --",
-                    f"\" AND SLEEP({self.time_delay}) --",
-                    f"1; WAITFOR DELAY '0:0:{self.time_delay}' --"
-                ]
-                
-                for time_payload in time_payloads:
-                    test_form_data = base_form_data.copy()
-                    test_form_data[field_name] = time_payload
-                    
-                    try:
-                        start_time = time.time()
-                        
-                        # Enviar o formulário
-                        if form_method == 'post':
-                            response = requests.post(
-                                action_url,
-                                data=test_form_data,
-                                headers=headers,
-                                proxies=proxies,
-                                timeout=self.time_delay + 5,  # Timeout um pouco maior que o delay
-                                verify=False  # Desabilitar verificação SSL para testes
-                            )
-                        else:  # GET
-                            response = requests.get(
-                                action_url,
-                                params=test_form_data,
-                                headers=headers,
-                                proxies=proxies,
-                                timeout=self.time_delay + 5,  # Timeout um pouco maior que o delay
-                                verify=False  # Desabilitar verificação SSL para testes
-                            )
-                        
-                        execution_time = time.time() - start_time
-                        
-                        # Se o tempo de execução for próximo ou maior que o delay configurado
-                        if execution_time >= self.time_delay:
-                            vulnerability = {
-                                'type': 'sql_injection',
-                                'name': 'Blind SQL Injection (Time-based)',
-                                'severity': 'critical',
-                                'location': f"Formulário em {form_url} (campo: {field_name})",
-                                'description': f"O campo '{field_name}' do formulário é vulnerável a ataques de injeção SQL baseada em tempo.",
-                                'evidence': f"Payload usado: {time_payload}\nDetectado atraso na resposta ao utilizar payload de injeção SQL com time delay.",
-                                'cwe_id': 'CWE-89',
-                                'remediation': """
-                                1. Use consultas parametrizadas ou prepared statements.
-                                2. Utilize ORM (Object-Relational Mapping) quando possível.
-                                3. Valide e sanitize todas as entradas de usuário.
-                                4. Implemente o princípio do privilégio mínimo no banco de dados.
-                                5. Implemente limites de tempo para consultas ao banco de dados.
-                                """
-                            }
-                            vulnerabilities.append(vulnerability)
-                            break  # Pular para o próximo campo após encontrar vulnerabilidade
-                            
-                    except requests.Timeout:
-                        # Um timeout também pode indicar uma injeção bem-sucedida
-                        vulnerability = {
-                            'type': 'sql_injection',
-                            'name': 'Blind SQL Injection (Time-based)',
-                            'severity': 'critical',
-                            'location': f"Formulário em {form_url} (campo: {field_name})",
-                            'description': f"O campo '{field_name}' do formulário é potencialmente vulnerável a ataques de injeção SQL baseada em tempo.",
-                            'evidence': f"Payload usado: {time_payload}\nA requisição atingiu o timeout ao utilizar payload de injeção SQL com time delay.",
-                            'cwe_id': 'CWE-89',
-                            'remediation': """
-                            1. Use consultas parametrizadas ou prepared statements.
-                            2. Utilize ORM (Object-Relational Mapping) quando possível.
-                            3. Valide e sanitize todas as entradas de usuário.
-                            4. Implemente o princípio do privilégio mínimo no banco de dados.
-                            5. Implemente limites de tempo para consultas ao banco de dados.
-                            """
-                        }
-                        vulnerabilities.append(vulnerability)
-                        break  # Pular para o próximo campo após encontrar vulnerabilidade
-                    except requests.RequestException:
-                        continue
         
         return vulnerabilities
-    
-    def scan(self, urls, forms, proxies=None, headers=None):
+
+    def scan(self):
         """
-        Executa o escaneamento de SQL Injection em URLs e formulários.
+        Executa o escaneamento completo de SQL Injection.
         
-        Args:
-            urls (list): Lista de URLs para analisar
-            forms (list): Lista de formulários para analisar
-            proxies (dict, opcional): Configuração de proxy
-            headers (dict, opcional): Cabeçalhos HTTP
-            
         Returns:
             list: Lista de vulnerabilidades encontradas
         """
+        if not self.target_url:
+            logger.error("URL alvo não especificada para SQLi Scanner")
+            return []
+            
         vulnerabilities = []
         
-        logger.info("Iniciando escaneamento de SQL Injection...")
+        # Testar a URL principal para parâmetros
+        vulnerabilities.extend(self.test_url_params(self.target_url))
         
-        # Testar URLs
-        for url in urls:
-            url_vulns = self.test_url_params(url, proxies, headers)
-            vulnerabilities.extend(url_vulns)
-        
-        # Testar formulários
-        for form in forms:
-            form_vulns = self.test_form(form, proxies, headers)
-            vulnerabilities.extend(form_vulns)
-        
-        logger.info(f"Escaneamento de SQL Injection concluído. Encontradas {len(vulnerabilities)} vulnerabilidades.")
+        # Se houver URLs adicionais para testar, poderíamos adicionar aqui
         
         return vulnerabilities 

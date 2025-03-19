@@ -13,8 +13,9 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 
+# Importar os scanners individualmente sem usar o __init__.py
 from modules.scanners.xss_scanner import XSSScanner
-from modules.scanners.sqli_scanner import SQLIScanner
+from modules.scanners.sqli_scanner import SQLiScanner  # Corrigido de SQLIScanner para SQLiScanner
 from modules.scanners.csrf_scanner import CSRFScanner
 from modules.scanners.headers_scanner import HeadersScanner
 from modules.scanners.port_scanner import PortScanner
@@ -87,7 +88,7 @@ class Scanner:
 
         if self.scan_type in ['basic', 'full', 'custom']:
             self.scanners.append(XSSScanner())
-            self.scanners.append(SQLIScanner())
+            self.scanners.append(SQLiScanner())  # Corrigido de SQLIScanner para SQLiScanner
 
         if self.scan_type in ['full', 'custom']:
             self.scanners.append(CSRFScanner())
